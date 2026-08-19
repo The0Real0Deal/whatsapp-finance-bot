@@ -23,13 +23,16 @@ app.post("/webhook", async (req, res) => {
   const text = message.text.body;
 
   try {
-    let { data: user } = await supabase.from("users").select("id").eq("phone_number", from).single();
+    let { data: user, error: userErr } = await supabase.from("users").select("id").eq("phone_number", from).maybeSingle();
+    
     if (!user) {
-      const { data: newUser } = await supabase.from("users").insert([{ phone_number: from }]).select().single();
+      const { data: newUser, error: insertErr } = await supabase.from("users").insert([{ phone_number: from }]).select().single();
+      if (insertErr) throw insertErr;
       user = newUser;
     }
 
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    // שימוש במודל התקין gemini-1.5-flash
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
     const prompt = `חלץ פרטי תנועה כספית והחזר JSON בלבד ללא markdown: {"amount": מספר, "category": "אוכל וסופר / מסעדות / תחבורה / חשבונות / קניות / שונות", "description": "תיאור קצר", "type": "הוצאה או הכנסה", "payment_method": "אשראי/מזומן/ביט"}\nקלט: ${text}`;
 
     const gRes = await axios.post(geminiUrl, {
@@ -51,12 +54,17 @@ app.post("/webhook", async (req, res) => {
 
       await axios.post(
         `https://graph.facebook.com/v20.0/${process.env.WA_PHONE_ID}/messages`,
-        { messaging_product: "whatsapp", to: from, type: "text", text: { body: `✅ ${parsed.type} של ${parsed.amount} ₪ (${parsed.category}) נרשמה בהצלחה!` } },
+        { 
+          messaging_product: "whatsapp", 
+          to: from, 
+          type: "text", 
+          text: { body: `✅ ${parsed.type} של ${parsed.amount} ₪ (${parsed.category}) נרשמה בהצלחה!` } 
+        },
         { headers: { Authorization: `Bearer ${process.env.WA_TOKEN}` } }
       );
     }
   } catch (err) {
-    console.error(err);
+    console.error("Webhook Error:", err.response?.data || err.message || err);
   }
 });
 
