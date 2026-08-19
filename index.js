@@ -57,8 +57,9 @@ app.post("/webhook", async (req, res) => {
         payment_method: parsed.payment_method
       }]);
 
-      const phoneId = process.env.WA_PHONE_ID?.trim();
-      const metaUrl = `https://graph.facebook.com/v21.0/${phoneId}/messages`;
+const phoneId = "1215733358296085"; 
+const metaUrl = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
+console.log("🔗 URL being requested:", metaUrl);
 
       await axios.post(
         metaUrl,
