@@ -15,69 +15,37 @@ app.get("/webhook", (req, res) => {
 });
 
 app.post("/webhook", async (req, res) => {
+  // 0. תמיד להחזיר 200 למטא כדי שלא יחשבו שהשרת נפל
   res.sendStatus(200);
-  
-  // מדפיס כל מידע גולמי שמגיע ממטא כדי לוודא חיבור
-  console.log("📥 Raw webhook event:", JSON.stringify(req.body));
 
   const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
   if (!message || message.type !== "text") return;
 
   const from = message.from;
   const text = message.text.body;
+  const phoneId = process.env.WA_PHONE_ID?.trim() || "1215733358296085"; // שימוש אוטומטי במזהה שלך
+  const waToken = process.env.WA_TOKEN?.trim();
 
+  console.log(`\n--- 📩 הודעה חדשה מ-${from}: "${text}" ---`);
+
+  // 1. בדיקת משתמש ב-Supabase
+  let userId;
   try {
-    console.log(`📩 הודעה התקבלה מ-${from}: "${text}"`);
-
+    console.log("[1] בודק משתמש ב-Supabase...");
     let { data: user } = await supabase.from("users").select("id").eq("phone_number", from).maybeSingle();
     if (!user) {
       const { data: newUser, error: insertErr } = await supabase.from("users").insert([{ phone_number: from }]).select().single();
       if (insertErr) throw insertErr;
       user = newUser;
     }
-
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
-    const prompt = `חלץ פרטי תנועה כספית והחזר JSON בלבד ללא markdown: {"amount": מספר, "category": "אוכל וסופר / מסעדות / תחבורה / חשבונות / קניות / שונות", "description": "תיאור קצר", "type": "הוצאה או הכנסה", "payment_method": "אשראי/מזומן/ביט"}\nקלט: ${text}`;
-
-    const gRes = await axios.post(geminiUrl, {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: "application/json" }
-    });
-
-    const parsed = JSON.parse(gRes.data.candidates[0].content.parts[0].text);
-    console.log("🤖 פענוח Gemini:", parsed);
-
-    if (parsed?.amount) {
-      await supabase.from("transactions").insert([{
-        user_id: user.id,
-        amount: parsed.amount,
-        category: parsed.category,
-        description: parsed.description,
-        type: parsed.type,
-        payment_method: parsed.payment_method
-      }]);
-
-const phoneId = "1215733358296085"; 
-const metaUrl = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
-console.log("🔗 URL being requested:", metaUrl);
-
-      await axios.post(
-        metaUrl,
-        {
-          messaging_product: "whatsapp",
-          to: from,
-          type: "text",
-          text: { body: `✅ ${parsed.type} של ${parsed.amount} ₪ (${parsed.category}) נרשמה בהצלחה!` }
-        },
-        { headers: { Authorization: `Bearer ${process.env.WA_TOKEN?.trim()}` } }
-      );
-
-      console.log("🚀 תגובה נשלחה בהצלחה לוואטסאפ!");
-    }
+    userId = user.id;
   } catch (err) {
-    console.error("Webhook Error:", err.response?.data || err.message || err);
+    console.error("❌ תקלה בשלב 1 (משתמש):", err.message || err);
+    return;
   }
-});
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  // 2. פיענוח בעזרת Gemini
+  let parsedData;
+  try {
+    console.log("[2] שולח טקסט לפיענוח ב-Gemini...");
+    const geminiUrl = `
