@@ -48,7 +48,7 @@ app.post("/webhook", async (req, res) => {
   try {
     console.log("[2] שולח טקסט לפיענוח ב-Gemini...");
     // עדכון למודל gemini-pro שעובד תמיד
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
     const prompt = `חלץ פרטי תנועה כספית. החזר רק JSON תקין ללא markdown. פורמט: {"amount": מספר, "category": "טקסט", "description": "טקסט", "type": "הוצאה או הכנסה", "payment_method": "אשראי/מזומן/ביט"}\nקלט: ${text}`;
 
     const gRes = await axios.post(geminiUrl, {
