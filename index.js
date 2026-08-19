@@ -1,10 +1,3 @@
-app.post("/webhook", async (req, res) => {
-  res.sendStatus(200);
-  console.log("📥 Raw webhook event:", JSON.stringify(req.body)); // שורה זו תחשוף כל אירוע שמטא שולחת
-
-  const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-  if (!message || message.type !== "text") return;
-  // ... המשך הקוד
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
 import axios from "axios";
@@ -23,6 +16,10 @@ app.get("/webhook", (req, res) => {
 
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
+  
+  // מדפיס כל מידע גולמי שמגיע ממטא כדי לוודא חיבור
+  console.log("📥 Raw webhook event:", JSON.stringify(req.body));
+
   const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
   if (!message || message.type !== "text") return;
 
