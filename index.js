@@ -23,15 +23,15 @@ app.post("/webhook", async (req, res) => {
   const text = message.text.body;
 
   try {
-    let { data: user, error: userErr } = await supabase.from("users").select("id").eq("phone_number", from).maybeSingle();
-    
+    console.log(`📩 הודעה התקבלה מ-${from}: "${text}"`);
+
+    let { data: user } = await supabase.from("users").select("id").eq("phone_number", from).maybeSingle();
     if (!user) {
       const { data: newUser, error: insertErr } = await supabase.from("users").insert([{ phone_number: from }]).select().single();
       if (insertErr) throw insertErr;
       user = newUser;
     }
 
-    // שימוש במודל התקין gemini-1.5-flash
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
     const prompt = `חלץ פרטי תנועה כספית והחזר JSON בלבד ללא markdown: {"amount": מספר, "category": "אוכל וסופר / מסעדות / תחבורה / חשבונות / קניות / שונות", "description": "תיאור קצר", "type": "הוצאה או הכנסה", "payment_method": "אשראי/מזומן/ביט"}\nקלט: ${text}`;
 
@@ -41,6 +41,7 @@ app.post("/webhook", async (req, res) => {
     });
 
     const parsed = JSON.parse(gRes.data.candidates[0].content.parts[0].text);
+    console.log("🤖 פענוח Gemini:", parsed);
 
     if (parsed?.amount) {
       await supabase.from("transactions").insert([{
@@ -52,16 +53,21 @@ app.post("/webhook", async (req, res) => {
         payment_method: parsed.payment_method
       }]);
 
+      const phoneId = process.env.WA_PHONE_ID?.trim();
+      const metaUrl = `https://graph.facebook.com/v21.0/${phoneId}/messages`;
+
       await axios.post(
-        `https://graph.facebook.com/v20.0/${process.env.WA_PHONE_ID}/messages`,
-        { 
-          messaging_product: "whatsapp", 
-          to: from, 
-          type: "text", 
-          text: { body: `✅ ${parsed.type} של ${parsed.amount} ₪ (${parsed.category}) נרשמה בהצלחה!` } 
+        metaUrl,
+        {
+          messaging_product: "whatsapp",
+          to: from,
+          type: "text",
+          text: { body: `✅ ${parsed.type} של ${parsed.amount} ₪ (${parsed.category}) נרשמה בהצלחה!` }
         },
-        { headers: { Authorization: `Bearer ${process.env.WA_TOKEN}` } }
+        { headers: { Authorization: `Bearer ${process.env.WA_TOKEN?.trim()}` } }
       );
+
+      console.log("🚀 תגובה נשלחה בהצלחה לוואטסאפ!");
     }
   } catch (err) {
     console.error("Webhook Error:", err.response?.data || err.message || err);
