@@ -5,7 +5,10 @@ import axios from "axios";
 const app = express();
 app.use(express.json());
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL?.trim(),
+  process.env.SUPABASE_KEY?.trim()
+);
 
 app.get("/webhook", (req, res) => {
   if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === process.env.VERIFY_TOKEN) {
@@ -22,8 +25,9 @@ app.post("/webhook", async (req, res) => {
 
   const from = message.from;
   const text = message.text.body;
-  const phoneId = process.env.WA_PHONE_ID?.trim() || "1215733358296085"; // שימוש אוטומטי במזהה שלך
+  const phoneId = process.env.WA_PHONE_ID?.trim() || "1215733358296085";
   const waToken = process.env.WA_TOKEN?.trim();
+  const geminiKey = process.env.GEMINI_API_KEY?.trim();
 
   console.log(`\n--- 📩 הודעה חדשה מ-${from}: "${text}" ---`);
 
@@ -47,16 +51,31 @@ app.post("/webhook", async (req, res) => {
   let parsedData;
   try {
     console.log("[2] שולח טקסט לפיענוח ב-Gemini...");
-    // עדכון למודל gemini-pro שעובד תמיד
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY?.trim()}`;
-    const prompt = `חלץ פרטי תנועה כספית. החזר רק JSON תקין ללא markdown. פורמט: {"amount": מספר, "category": "טקסט", "description": "טקסט", "type": "הוצאה או הכנסה", "payment_method": "אשראי/מזומן/ביט"}\nקלט: ${text}`;
+    
+    if (!geminiKey) {
+      throw new Error("משתנה הסביבה GEMINI_API_KEY חסר או ריק ב-Render!");
+    }
 
-    const gRes = await axios.post(geminiUrl, {
-      contents: [{ parts: [{ text: prompt }] }]
-    });
+    const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+    const prompt = `חלץ פרטי תנועה כספית. החזר JSON תקין בלבד ללא תגי markdown. פורמט: {"amount": מספר, "category": "טקסט", "description": "טקסט", "type": "הוצאה או הכנסה", "payment_method": "אשראי/מזומן/ביט"}\nקלט: ${text}`;
 
-    let rawResponse = gRes.data.candidates[0].content.parts[0].text;
-    rawResponse = rawResponse.replace(/```json/g, '').replace(/```/g, '').trim(); // ניקוי אוטומטי של markdown
+    const gRes = await axios.post(
+      geminiUrl,
+      {
+        contents: [{ parts: [{ text: prompt }] }]
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": geminiKey
+        }
+      }
+    );
+
+    let rawResponse = gRes.data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawResponse) throw new Error("לא התקבלה תשובה תקינה מ-Gemini");
+
+    rawResponse = rawResponse.replace(/```json/g, "").replace(/```/g, "").trim();
     parsedData = JSON.parse(rawResponse);
     console.log("   V פיענוח עבר בהצלחה:", parsedData);
   } catch (err) {
