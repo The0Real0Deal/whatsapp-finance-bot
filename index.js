@@ -31,7 +31,7 @@ app.post("/webhook", async (req, res) => {
   const text = message.text.body;
   const phoneId = process.env.WA_PHONE_ID?.trim();
   const waToken = process.env.WA_TOKEN?.trim();
-  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+  const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent";
 
   console.log(`\n--- 📩 הודעה חדשה מ-${from}: "${text}" ---`);
 
