@@ -5,10 +5,14 @@ import axios from "axios";
 const app = express();
 app.use(express.json());
 
-const supabase = createClient(
-  process.env.SUPABASE_URL?.trim(),
-  process.env.SUPABASE_KEY?.trim()
-);
+const supabaseUrl = process.env.SUPABASE_URL?.trim();
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || process.env.SUPABASE_KEY?.trim();
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error("Missing Supabase configuration");
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 app.get("/webhook", (req, res) => {
   if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === process.env.VERIFY_TOKEN) {
@@ -25,19 +29,29 @@ app.post("/webhook", async (req, res) => {
 
   const from = message.from;
   const text = message.text.body;
-  const phoneId = process.env.WA_PHONE_ID?.trim() || "1215733358296085";
+  const phoneId = process.env.WA_PHONE_ID?.trim();
   const waToken = process.env.WA_TOKEN?.trim();
   const geminiKey = process.env.GEMINI_API_KEY?.trim();
 
   console.log(`\n--- 📩 הודעה חדשה מ-${from}: "${text}" ---`);
 
-  // 1. בדיקת משתמש ב-Supabase
+  // 1. בדיקת / יצירת משתמש ב-Supabase
   let userId;
   try {
-    console.log("[1] בודק משתמש ב-Supabase...");
-    let { data: user } = await supabase.from("users").select("id").eq("phone_number", from).maybeSingle();
+    let { data: user, error: selectErr } = await supabase
+      .from("users")
+      .select("id")
+      .eq("phone_number", from)
+      .maybeSingle();
+
+    if (selectErr) throw selectErr;
+
     if (!user) {
-      const { data: newUser, error: insertErr } = await supabase.from("users").insert([{ phone_number: from }]).select().single();
+      const { data: newUser, error: insertErr } = await supabase
+        .from("users")
+        .insert([{ phone_number: from }])
+        .select("id")
+        .single();
       if (insertErr) throw insertErr;
       user = newUser;
     }
@@ -50,17 +64,30 @@ app.post("/webhook", async (req, res) => {
   // 2. פיענוח בעזרת Gemini
   let parsedData;
   try {
-    console.log("[2] שולח טקסט לפיענוח ב-Gemini...");
-    if (!geminiKey) throw new Error("משתנה GEMINI_API_KEY חסר ב-Render!");
+    if (!geminiKey) throw new Error("משתנה GEMINI_API_KEY חסר!");
 
     const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
-    const prompt = `חלץ פרטי תנועה כספית מהטקסט. החזר JSON בלבד ללא Markdown. מבנה: {"amount": מספר, "category": "טקסט", "description": "טקסט", "type": "הוצאה או הכנסה", "payment_method": "אשראי/מזומן/ביט"}\nקלט: ${text}`;
+    const prompt = `חלץ פרטי תנועה כספית מהטקסט הבא. אם אין פרטי עסקה, החזר ערכים ריקים/null.\nקלט: ${text}`;
 
     const gRes = await axios.post(
       geminiUrl,
       {
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              amount: { type: "NUMBER" },
+              category: { type: "STRING" },
+              description: { type: "STRING" },
+              type: { type: "STRING" },
+              payment_method: { type: "STRING" },
+              isValidTransaction: { type: "BOOLEAN" }
+            },
+            required: ["isValidTransaction"]
+          }
+        }
       },
       {
         headers: {
@@ -74,7 +101,9 @@ app.post("/webhook", async (req, res) => {
     if (!rawResponse) throw new Error("לא התקבלה תשובה מ-Gemini");
 
     parsedData = JSON.parse(rawResponse.trim());
-    console.log("   V פיענוח עבר בהצלחה:", parsedData);
+    if (!parsedData.isValidTransaction || !parsedData.amount) {
+      throw new Error("ההודעה אינה מכילה פרטי עסקה תקינים");
+    }
   } catch (err) {
     console.error("❌ תקלה בשלב 2 (Gemini):", err.response?.data || err.message);
     return;
@@ -82,7 +111,6 @@ app.post("/webhook", async (req, res) => {
 
   // 3. שמירת התנועה ב-Supabase
   try {
-    console.log("[3] שומר תנועה בטבלת transactions...");
     const { error: txErr } = await supabase.from("transactions").insert([{
       user_id: userId,
       amount: parsedData.amount,
@@ -97,9 +125,8 @@ app.post("/webhook", async (req, res) => {
     return;
   }
 
-  // 4. שליחת התשובה לוואטסאפ
+  // 4. שליחת אישור לוואטסאפ
   try {
-    console.log("[4] שולח תשובה חזרה לוואטסאפ...");
     const metaUrl = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
     await axios.post(
       metaUrl,
@@ -107,11 +134,11 @@ app.post("/webhook", async (req, res) => {
         messaging_product: "whatsapp",
         to: from,
         type: "text",
-        text: { body: `✅ ${parsedData.type} של ${parsedData.amount} ₪ (${parsedData.category}) נרשמה בהצלחה!` }
+        text: { body: `✅ ${parsedData.type || "תנועה"} של ${parsedData.amount} ₪ (${parsedData.category || "ללא קטגוריה"}) נרשמה בהצלחה!` }
       },
       { headers: { Authorization: `Bearer ${waToken}` } }
     );
-    console.log("✅ הכל עבד! התשובה נשלחה.");
+    console.log("✅ התשובה נשלחה בהצלחה.");
   } catch (err) {
     console.error("❌ תקלה בשלב 4 (שליחה לווצאפ):", err.response?.data || err.message);
   }
